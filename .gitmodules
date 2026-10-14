@@ -1,3 +1,6 @@
 [submodule "client-gateway"]
 	path = client-gateway
 	url = github-faci-personal:faci-nest-microservicios-curso/clients-gateway.git
+[submodule "products-ms"]
+	path = products-ms
+	url = git@github-faci-personal:faci-nest-microservicios-curso/products-microservice.git
