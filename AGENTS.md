@@ -5,23 +5,27 @@ Context for AI agents working in this repository. Read this before making change
 ## 1. What this repo is
 
 A **NestJS microservices practice project** (from a NestJS microservices course:
-gateway + `products-ms` + `orders-ms`). It is **not** a single monorepo: each
-folder is an **independent npm package** with its own `package.json`,
-`node_modules`, `.env` and scripts. There is no root `package.json`.
+gateway + `products-ms` + `orders-ms` + `payments-ms` + `auth-ms`). It is **not**
+a single monorepo: each folder is an **independent npm package** with its own
+`package.json`, `node_modules`, `.env` and scripts. There is no root
+`package.json`. Most folders are also git **submodules** (see `.gitmodules`).
 
 **Source of truth is the code in this repo**, not the course material. If a course
 lesson conflicts with the code, follow the code and flag the discrepancy.
 
 ## 2. Services at a glance
 
-| Folder          | Role                        | Transport        | Port | Data layer                                   |
-| --------------- | --------------------------- | ---------------- | ---- | -------------------------------------------- |
-| `client-gateway`| HTTP/REST entrypoint        | HTTP (+ TCP clients) | 3000 | none                                          |
-| `products-ms`   | Products microservice       | TCP              | 3001 | Prisma + **SQLite** (`file:.dev.db`)          |
-| `orders-ms`     | Orders microservice         | TCP              | 3002 | Prisma + **PostgreSQL** (Docker, host 5433)   |
+| Folder           | Role                        | Transport          | Port | Data layer                                   |
+| ---------------- | --------------------------- | ------------------ | ---- | -------------------------------------------- |
+| `client-gateway` | HTTP/REST entrypoint        | HTTP + NATS clients | 3000 | none                                          |
+| `products-ms`    | Products microservice       | NATS               | 3001 | Prisma + **SQLite** (`file:.dev.db`)          |
+| `orders-ms`      | Orders microservice         | NATS               | 3002 | Prisma + **PostgreSQL** (Docker, host 5433)   |
+| `payments-ms`    | Stripe payments (hybrid)    | HTTP + NATS        | 3003 | none                                          |
+| `auth-ms`        | Users / JWT auth            | NATS               | 3004 | Prisma + **MongoDB** (Docker, host 27017)     |
 
-Gateway talks to microservices via `ClientsModule.register` (TCP) using tokens
-`PRODUCT_SERVICE` and `ORDER_SERVICE` (see `client-gateway/src/config/services.ts`).
+Gateway talks to microservices over **NATS** (`Transport.NATS`), using the token
+`NATS_SERVICE` (see `client-gateway/src/config/services.ts`). This is the real
+transport; ignore older notes that say TCP.
 
 Stack: NestJS 12, TypeScript 6, Node 24, npm.
 
@@ -35,7 +39,7 @@ npm run lint
 npm test
 ```
 
-Database / Prisma (mostly for `orders-ms`; `products-ms` uses SQLite):
+Database / Prisma (`orders-ms` uses Postgres; `products-ms` SQLite; `auth-ms` MongoDB):
 
 ```bash
 docker compose up -d            # orders-ms: start local Postgres
@@ -50,6 +54,9 @@ npx prisma db push              # only for schemaless providers (e.g. MongoDB)
 - Products: `POST /api/products`, `GET /api/products?page&limit`,
   `GET /api/products/:id`, `PATCH /api/products/:id`, `DELETE /api/products/:id`
 - Orders: `POST /api/orders`, `GET /api/orders`, `GET /api/orders/:id`
+  — **protected** by `AuthGuard` (needs `Authorization: Bearer <token>`)
+- Auth: `POST /api/auth/register-user`, `POST /api/auth/login-user` (public),
+  `GET /api/auth/get-user` (requires `Authorization: Bearer <token>`)
 
 ## 5. Microservice message patterns (`cmd`)
 
@@ -57,6 +64,8 @@ npx prisma db push              # only for schemaless providers (e.g. MongoDB)
   `update_product`, `delete_product`
 - Orders: `create_order`, `find_all_orders`, `find_one_order`,
   `change_order_status`
+- Auth: `auth.register.user`, `auth.login.user`, `auth.verify.user`
+  (`verify.user` receives `{ token }` and returns `{ user, token }`)
 
 Gateway uses `client.send({ cmd }, payload)`. Most methods return the raw
 `Observable`; some (e.g. `find_one_product`) use `firstValueFrom` + `try/catch`
@@ -67,10 +76,25 @@ and rethrow as `RpcException`.
 - **Config**: `dotenv` + `joi`. Every service validates `process.env` at startup
   and exports a typed `envs` object from `src/config`. A missing required var
   throws `Config validation error ...`.
-- **ValidationPipe** is global in **all three apps** with
+- **ValidationPipe** is global in **all apps** with
   `{ whitelist: true, forbidNonWhitelisted: true }`. Consequence: **any property
   not declared in the DTO produces HTTP 400** (`property X should not exist`).
   Keep gateway DTOs and microservice DTOs **in sync**.
+- **Auth**: `auth-ms` owns the JWT secret and signs/verifies tokens. The gateway
+  never verifies JWTs locally; its `AuthGuard` asks `auth-ms` via
+  `auth.verify.user`. DTOs (`CreateUserDto`, `LoginUserDto`) are duplicated in
+  `client-gateway/src/auth/dto` and `auth-ms/src/auth/dto` — keep them identical.
+- **Protected routes**: `AuthModule` exports `AuthService` + `AuthGuard`. Guard is
+  applied at controller level with `@UseGuards(AuthGuard)`. `OrdersController` is
+  protected; `ProductsController` is intentionally **public**. To protect another
+  controller, import `AuthModule` into its module and add the decorator.
+  `payments-ms` exposes its own HTTP server (port 3003, not proxied by the
+  gateway), so it has its own `AuthGuard` (`src/auth/guards/auth.guard.ts`) that
+  verifies via NATS; it is applied **only** to
+  `POST /payments/create-payment-session`. `webhook`/`success`/`cancel` stay
+  public — Stripe and the browser cannot send our JWT. That guard ignores
+  non-HTTP contexts (`context.getType() !== 'http'`), so internal NATS messages
+  are never blocked.
 - **Errors**: gateway registers `RpcCustomExceptionFilter` to map `RpcException`
   from microservices into HTTP responses.
 - **Enums**: `OrderStatus` is declared in the gateway
@@ -99,6 +123,32 @@ and rethrow as `RpcException`.
 - `orders-ms/docker-compose.yml` runs `postgres:16` with `user: "1000:1000"` so
   the bind-mounted `./postgres` is owned by the host user, and publishes
   **host port 5433** (5432 is taken by another container).
+- Because the container runs as uid 1000 but the image creates
+  `/var/run/postgresql` as the `postgres` user (uid 999), the entrypoint's
+  `chmod 03775 /var/run/postgresql` used to fail with
+  `chmod: changing permissions of '/var/run/postgresql': Operation not permitted`.
+  Fixed with a `tmpfs` mount owned by uid/gid 1000. `stop_signal: SIGINT` gives
+  Postgres a clean "fast shutdown" so stop/start/down does not log
+  `database system was not properly shut down`. Keep both settings.
+- `auth-ms`: `provider = "mongodb"`,
+  `DATABASE_URL="mongodb://localhost:27017/authms?directConnection=true"` (in
+  Docker it points at `auth-db:27017`). Model `User` uses
+  `id String @id @default(auto()) @map("_id") @db.ObjectId`. **MongoDB must run
+  as a replica set** (even a single node) because Prisma uses transactions:
+  the `auth-db` service starts `mongod --replSet rs0` and its healthcheck runs
+  `rs.initiate(...)`. Use `npx prisma db push` (not `migrate dev`) for Mongo.
+  Because the container is Alpine, `binaryTargets` includes
+  `linux-musl-openssl-3.0.x` (same as `products-ms`).
+- Prisma migrations are per service: `orders-ms` uses `migrate dev`, `auth-ms`
+  uses `db push`, `products-ms` uses `migrate dev` on SQLite.
+- In Docker, `orders-ms` `docker:start` uses `prisma migrate deploy` (NOT
+  `migrate dev`, which is interactive and fails with
+  `environment is non-interactive, which is not supported`). Use `migrate dev`
+  manually only when creating migrations.
+- Known drift: `orders-ms/prisma/schema.prisma` `enum OrderStatus` lacks `PAID`
+  while the Postgres enum already has it, so `GET /api/orders` fails with
+  `Value 'PAID' not found in enum 'OrderStatus'`. Add `PAID` to the schema (and
+  regenerate) to fix.
 
 ## 8. Critical gotcha: stale dev processes
 
@@ -140,4 +190,14 @@ npm run start:dev
 curl -X POST http://localhost:3000/api/orders \
   -H 'Content-Type: application/json' \
   -d '{"totalAmount":100,"totalItems":2}'
+
+# auth smoke test (auth-ms + Mongo must be up: docker compose up -d nats-server auth-db auth-ms client-gateway)
+curl -X POST http://localhost:3000/api/auth/register-user \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Faci","email":"faci@test.com","password":"123456"}'
+curl -X POST http://localhost:3000/api/auth/login-user \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"faci@test.com","password":"123456"}'
+curl http://localhost:3000/api/auth/get-user \
+  -H 'Authorization: Bearer <token>'
 ```

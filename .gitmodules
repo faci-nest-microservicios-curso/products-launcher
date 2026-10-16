@@ -10,3 +10,6 @@
 [submodule "payments-ms"]
 	path = payments-ms
 	url = git@github-faci-personal:faci-nest-microservicios-curso/payment-ms.git
+[submodule "auth-ms"]
+	path = auth-ms
+	url = git@github-faci-personal:faci-nest-microservicios-curso/auth-ms.git
