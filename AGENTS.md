@@ -201,3 +201,36 @@ curl -X POST http://localhost:3000/api/auth/login-user \
 curl http://localhost:3000/api/auth/get-user \
   -H 'Authorization: Bearer <token>'
 ```
+
+## 11. Production Docker images (`dockerfile.prod`)
+
+Each service has a **`dockerfile.prod`** (multi-stage: `deps` → `build` → `prod`)
+and the root has **`docker-compose.prod.yml`**. This mirrors the course's section
+13 reference (`products-launcher/`), with one deviation: the base image is
+`node:24-alpine3.24` (the reference uses `node:21-alpine3.19`) to match this
+project's Node 24.
+
+```bash
+docker compose -f docker-compose.prod.yml build
+docker compose -f docker-compose.prod.yml up
+```
+
+- Prod uses **external** databases: set `AUTH_DATABASE_URL` (Mongo) and
+  `ORDERS_DATABASE_URL` (Postgres) in `.env`. There are no Mongo/Postgres
+  services in the prod compose.
+- Change the image prefix in `docker-compose.prod.yml`
+  (`northamerica-northeast1-docker.pkg.dev/...`) to **your** registry before
+  pushing.
+- **Prisma gotcha**: run `npx prisma generate` **before** pruning. The reference
+  uses `npm ci --only=production`, but that deletes `node_modules/` (including
+  `node_modules/.prisma`), and the following `npx prisma generate` then has no
+  local CLI (it downloads the latest Prisma). Here we do `npx prisma generate`
+  (pinned 5.10.2 from devDependencies) and then `npm prune --omit=dev`, which
+  keeps `.prisma`.
+- `orders-ms` builds with `ARG ORDERS_DATABASE_URL` and runs
+  `npx prisma migrate deploy` at **build time**, so the Postgres URL must be
+  reachable from the build.
+- `payments-ms` has no Prisma, so its `dockerfile.prod` has **no**
+  `prisma generate` (the reference had a stray one).
+- `node:24-alpine3.24` already ships `libssl3`/`libcrypto3`, so Prisma works
+  without `apk add openssl`.
