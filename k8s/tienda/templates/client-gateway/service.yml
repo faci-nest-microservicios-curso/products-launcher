@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: client-gateway
+  labels:
+    app: client-gateway
+spec:
+  selector:
+    app: client-gateway
+  ports:
+    - name: http
+      port: {{ .Values.ports.gateway }}
+      targetPort: {{ .Values.ports.gateway }}

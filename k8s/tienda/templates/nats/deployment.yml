@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nats-server
+  labels:
+    app: nats-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nats-server
+  template:
+    metadata:
+      labels:
+        app: nats-server
+    spec:
+      containers:
+        - name: nats-server
+          image: {{ .Values.nats.image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: client
+              containerPort: 4222
+            - name: monitor
+              containerPort: 8222

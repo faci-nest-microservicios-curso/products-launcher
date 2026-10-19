@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments-ms
+  labels:
+    app: payments-ms
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payments-ms
+  template:
+    metadata:
+      labels:
+        app: payments-ms
+    spec:
+      containers:
+        - name: payments-ms
+          image: "{{ .Values.image.registry }}/payments-ms:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: PORT
+              value: "{{ .Values.ports.payments }}"
+            - name: NATS_SERVERS
+              value: "{{ .Values.nats.url }}"
+            - name: STRIPE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: STRIPE_SECRET
+            - name: STRIPE_SUCCESS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: STRIPE_SUCCESS_URL
+            - name: STRIPE_CANCEL_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: STRIPE_CANCEL_URL
+            - name: STRIPE_ENDPOINT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: STRIPE_ENDPOINT_SECRET
+          ports:
+            - containerPort: {{ .Values.ports.payments }}

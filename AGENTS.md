@@ -145,10 +145,9 @@ and rethrow as `RpcException`.
   `migrate dev`, which is interactive and fails with
   `environment is non-interactive, which is not supported`). Use `migrate dev`
   manually only when creating migrations.
-- Known drift: `orders-ms/prisma/schema.prisma` `enum OrderStatus` lacks `PAID`
-  while the Postgres enum already has it, so `GET /api/orders` fails with
-  `Value 'PAID' not found in enum 'OrderStatus'`. Add `PAID` to the schema (and
-  regenerate) to fix.
+- `OrderStatus` includes `PAID` in `orders-ms/prisma/schema.prisma`, in the
+  gateway enum and in `orders-ms`'s `OrderStatusList` (the Postgres enum already
+  has it). Keep the three in sync; the local DB may contain PAID orders.
 
 ## 8. Critical gotcha: stale dev processes
 
@@ -202,6 +201,13 @@ curl http://localhost:3000/api/auth/get-user \
   -H 'Authorization: Bearer <token>'
 ```
 
+Smoke test completo (crea usuario aleatorio, producto, pedido y prueba auth,
+products, orders y payments; requiere `curl` y `jq`):
+
+```bash
+./smoke-test.sh
+```
+
 ## 11. Production Docker images (`dockerfile.prod`)
 
 Each service has a **`dockerfile.prod`** (multi-stage: `deps` → `build` → `prod`)
@@ -218,9 +224,14 @@ docker compose -f docker-compose.prod.yml up
 - Prod uses **external** databases: set `AUTH_DATABASE_URL` (Mongo) and
   `ORDERS_DATABASE_URL` (Postgres) in `.env`. There are no Mongo/Postgres
   services in the prod compose.
-- Change the image prefix in `docker-compose.prod.yml`
-  (`northamerica-northeast1-docker.pkg.dev/...`) to **your** registry before
-  pushing.
+- The prod compose has its own `name: products-launcher-prod`, so it does not
+  reuse or overwrite the dev containers from `docker-compose.yml` (same
+  directory). For local testing, `.env` points both DB URLs at
+  `host.docker.internal` and `auth-ms`/`orders-ms` declare that `extra_hosts`.
+- Images are named `${IMAGE_REGISTRY:-localhost:5000}/<service>:${IMAGE_TAG:-1.0.0}`.
+  Push with `docker compose -f docker-compose.prod.yml push` (it skips
+  `nats-server`). Override `IMAGE_REGISTRY` / `IMAGE_TAG` in `.env`; the default
+  is the local registry from `registry/docker-compose.yml`.
 - **Prisma gotcha**: run `npx prisma generate` **before** pruning. The reference
   uses `npm ci --only=production`, but that deletes `node_modules/` (including
   `node_modules/.prisma`), and the following `npx prisma generate` then has no
@@ -232,5 +243,39 @@ docker compose -f docker-compose.prod.yml up
   reachable from the build.
 - `payments-ms` has no Prisma, so its `dockerfile.prod` has **no**
   `prisma generate` (the reference had a stray one).
-- `node:24-alpine3.24` already ships `libssl3`/`libcrypto3`, so Prisma works
-  without `apk add openssl`.
+- `node:24-alpine3.24` ships `libssl3`/`libcrypto3`, but Prisma 5.10.2 still
+  needs the `openssl` **binary** to detect the version. Without it
+  `prisma migrate deploy` fails in the build with
+  `Could not parse schema engine response`, and at runtime the client looks for
+  the `linux-musl` engine instead of `linux-musl-openssl-3.0.x`. The `build`
+  **and `prod`** stages of `orders-ms`, `products-ms` and `auth-ms` run
+  `apk add --no-cache openssl`; keep both.
+- `products-ms` uses SQLite and the image includes `prisma/.dev.db` (the
+  `.dockerignore` only excludes `prisma/*.db-journal`), so the seeded DB ships
+  inside the image. The prod stage also runs
+  `chown -R node:node /usr/src/app/prisma`: without it SQLite fails with
+  `attempt to write a readonly database` because the container runs as `node`.
+  There is no volume, so writes live in the container layer (ephemeral).
+
+## 12. Kubernetes local (minikube)
+
+- The Helm chart `k8s/tienda` deploys the whole stack: `client-gateway`,
+  `products-ms`, `orders-ms`, `auth-ms`, `payments-ms` and `nats-server`.
+  Only `client-gateway`, `payments-ms` and `nats-server` have Services; the
+  other microservices communicate only over NATS.
+- Images are loaded into minikube with
+  `minikube image load localhost:5000/<service>:1.0.0`; the chart uses
+  `imagePullPolicy: IfNotPresent`. `localhost:5000` inside a pod is the node,
+  not the host, so the local registry is **not** directly reachable from pods.
+- Databases stay **external** (same as `docker-compose.prod.yml`): the dev
+  Postgres (`orders_database`, host 5433) and Mongo (`auth_database`, host
+  27017) run in Docker on the host. Pods reach them at
+  `host.minikube.internal`; Mongo keeps `directConnection=true`.
+- `products-ms` uses the SQLite DB baked into the image; writes are ephemeral
+  (no PVC).
+- Credentials live in the `tienda-secrets` Secret (not in the chart):
+  `AUTH_DATABASE_URL`, `ORDERS_DATABASE_URL`, `JWT_SECRET`, `JWT_EXPIRES_IN`
+  and `STRIPE_*`. Create/update it with `kubectl` before
+  `helm upgrade --install tienda k8s/tienda`.
+- Smoke test: port-forward `svc/client-gateway` 3000 and `svc/payments-ms`
+  3003, then `./smoke-test.sh`.

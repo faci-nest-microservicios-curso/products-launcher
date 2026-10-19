@@ -1,0 +1,13 @@
+El stack "tienda" quedó desplegado en el namespace {{ .Release.Namespace }}.
+
+Pods:
+  kubectl get pods
+
+Para probar desde tu PC, abre dos port-forward en terminales separadas:
+
+  kubectl port-forward svc/client-gateway 3000:{{ .Values.ports.gateway }}
+  kubectl port-forward svc/payments-ms 3003:{{ .Values.ports.payments }}
+
+Y ejecuta el smoke test:
+
+  ./smoke-test.sh

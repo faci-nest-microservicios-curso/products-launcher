@@ -1,0 +1,19 @@
+# Valores del stack "tienda" para minikube.
+# Las imágenes viven en el registry local y se cargan con `minikube image load`.
+
+image:
+  registry: localhost:5000
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+
+# Secret con las URLs de BD y credenciales. Se crea con kubectl antes del upgrade:
+#   kubectl create secret generic tienda-secrets ...
+secretName: tienda-secrets
+
+nats:
+  image: nats:latest
+  url: nats://nats-server:4222
+
+ports:
+  gateway: 3000
+  payments: 3003

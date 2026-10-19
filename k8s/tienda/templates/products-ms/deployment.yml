@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: products-ms
+  labels:
+    app: products-ms
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: products-ms
+  template:
+    metadata:
+      labels:
+        app: products-ms
+    spec:
+      containers:
+        - name: products-ms
+          image: "{{ .Values.image.registry }}/products-ms:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: PORT
+              value: "3000"
+            - name: NATS_SERVERS
+              value: "{{ .Values.nats.url }}"
+            # SQLite incluida en la imagen (prisma/.dev.db).
+            - name: DATABASE_URL
+              value: "file:.dev.db"

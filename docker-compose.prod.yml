@@ -1,13 +1,21 @@
-# Producción: construye/usar las imágenes "dockerfile.prod" de cada microservicio.
+# Producción: construye/publica las imágenes "dockerfile.prod" de cada microservicio.
 #
 #   docker compose -f docker-compose.prod.yml build
-#   docker compose -f docker-compose.prod.yml up
+#   docker compose -f docker-compose.prod.yml push
+#   docker compose -f docker-compose.prod.yml up -d
 #
-# NOTA: cambia el prefijo de las imágenes por TU registry (Artifact Registry /
-# Docker Hub) antes de hacer push. Aquí se dejó el de la referencia del curso.
+# Las imágenes se publican en IMAGE_REGISTRY, que por defecto es el registry
+# local (localhost:5000, ver registry/docker-compose.yml). Para usar otro:
+#   IMAGE_REGISTRY=192.168.1.50:5000 IMAGE_TAG=1.0.0 docker compose -f ... build
+#   (o define IMAGE_REGISTRY / IMAGE_TAG en el .env)
 #
 # Las bases de datos son EXTERNAS (no hay servicios de Mongo/Postgres aquí):
 # se configuran con AUTH_DATABASE_URL y ORDERS_DATABASE_URL en el .env.
+
+# Proyecto Compose propio: así el stack de producción no reutiliza ni pisa los
+# contenedores del docker-compose.yml de desarrollo (mismo directorio).
+name: products-launcher-prod
+
 services:
 
   nats-server:
@@ -17,7 +25,7 @@ services:
     build:
       context: ./client-gateway
       dockerfile: dockerfile.prod
-    image: northamerica-northeast1-docker.pkg.dev/tienda-microservices/image-registry/client-gateway
+    image: ${IMAGE_REGISTRY:-localhost:5000}/client-gateway:${IMAGE_TAG:-1.0.0}
     ports:
       - ${CLIENT_GATEWAY_PORT}:${CLIENT_GATEWAY_PORT}
     environment:
@@ -29,19 +37,22 @@ services:
     build:
       context: ./auth-ms
       dockerfile: dockerfile.prod
-    image: northamerica-northeast1-docker.pkg.dev/tienda-microservices/image-registry/auth-ms
+    image: ${IMAGE_REGISTRY:-localhost:5000}/auth-ms:${IMAGE_TAG:-1.0.0}
     environment:
       - PORT=3000
       - NATS_SERVERS=nats://nats-server:4222
       - DATABASE_URL=${AUTH_DATABASE_URL}
       - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
+    # Para probar en local con la Mongo de docker-compose.yml (host.docker.internal).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   products-ms:
     build:
       context: ./products-ms
       dockerfile: dockerfile.prod
-    image: northamerica-northeast1-docker.pkg.dev/tienda-microservices/image-registry/products-ms
+    image: ${IMAGE_REGISTRY:-localhost:5000}/products-ms:${IMAGE_TAG:-1.0.0}
     environment:
       - PORT=3000
       - NATS_SERVERS=nats://nats-server:4222
@@ -57,11 +68,18 @@ services:
       dockerfile: dockerfile.prod
       args:
         - ORDERS_DATABASE_URL=${ORDERS_DATABASE_URL}
-    image: northamerica-northeast1-docker.pkg.dev/tienda-microservices/image-registry/orders-ms
+      # Permite usar host.docker.internal:5433 si la Postgres de desarrollo
+      # corre en el host (el build ejecuta `prisma migrate deploy`).
+      extra_hosts:
+        - "host.docker.internal:host-gateway"
+    image: ${IMAGE_REGISTRY:-localhost:5000}/orders-ms:${IMAGE_TAG:-1.0.0}
     environment:
       - PORT=3000
       - DATABASE_URL=${ORDERS_DATABASE_URL}
       - NATS_SERVERS=nats://nats-server:4222
+    # Para probar en local con la Postgres de docker-compose.yml (host.docker.internal).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
 
 # ======================
@@ -71,7 +89,7 @@ services:
     build:
       context: ./payments-ms
       dockerfile: dockerfile.prod
-    image: northamerica-northeast1-docker.pkg.dev/tienda-microservices/image-registry/payments-ms
+    image: ${IMAGE_REGISTRY:-localhost:5000}/payments-ms:${IMAGE_TAG:-1.0.0}
     ports:
       - ${PAYMENT_MS_PORT}:${PAYMENT_MS_PORT}
     environment:

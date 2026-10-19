@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: client-gateway
+  labels:
+    app: client-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: client-gateway
+  template:
+    metadata:
+      labels:
+        app: client-gateway
+    spec:
+      containers:
+        - name: client-gateway
+          image: "{{ .Values.image.registry }}/client-gateway:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: PORT
+              value: "{{ .Values.ports.gateway }}"
+            - name: NATS_SERVERS
+              value: "{{ .Values.nats.url }}"
+          ports:
+            - containerPort: {{ .Values.ports.gateway }}
